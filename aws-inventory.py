@@ -1,10 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Quick n dirty CLI for checking ec2 inventory
-
-Specifically design for my own personal workflow.
-"""
 import signal
 import sys
 from time import gmtime, strftime
@@ -15,6 +9,14 @@ import boto.rds
 import boto.vpc
 import boto.elasticache
 import boto3
+import argparse
+import logging
+
+__version__ = "0.1.2"
+
+LOG = logging.getLogger('aws-inventory')
+LOG_FORMAT = (
+    '%(asctime)s - %(threadName)s - %(name)s - %(levelname)s - %(message)s')
 
 def signal_handler(signal, frame):
     print('\n\nYOU CAN HAZ CTRL+C!\n\n')
@@ -23,7 +25,7 @@ def signal_handler(signal, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 # All the regions we should be scanning
-regions = ['eu-west-1', 'eu-central-1', 'us-east-1', 'us-west-2','us-west-1','ap-southeast-1','ap-southeast-2','ap-northeast-1','sa-east-1']
+__regions = ['eu-west-1', 'eu-central-1', 'us-east-1', 'us-west-2','us-west-1','ap-southeast-1','ap-southeast-2','ap-northeast-1','sa-east-1']
 
 def get_property_func(key):
     """
@@ -107,7 +109,7 @@ def print_result( title, table, headers=None ):
         print tabulate(table, headers)
 
 
-def voyeur(instances, to_row, sort_by=None, filter_by=None):
+def process_list(instances, to_row, sort_by=None, filter_by=None):
     if sort_by:
         instances.sort(key=get_property_func(sort_by))
     if filter_by:
@@ -136,7 +138,7 @@ def get_options(input_args, headers=None):
     return sort_by, filter_by_kwargs
 
 
-def list_ec2(input_args):
+def list_ec2(region, input_args=""):
     headers = (
         'name',
         'customer',
@@ -149,25 +151,24 @@ def list_ec2(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('ec2', region)
-        instances = conn.describe_instances()
-        instanc = [i for r in instances['Reservations'] for i in r['Instances']]
-        to_row = lambda x: (
-            get_tags(x, 'Name'),
-            get_tags(x, 'Tenant'),
-            get_tags(x, 'Environment'),
-            x['State']['Name'],
-            get_try(x, 'PublicIpAddress'),
-            get_try(x, 'PrivateIpAddress'),
-            x['LaunchTime'],  #.split('T', 2)[0],
-            x['InstanceId'],
-        )
-        print_result("EC2 @ region '%s'" % region,
-            voyeur(instanc, to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers)
+    conn = boto3.client('ec2', region)
+    instances = conn.describe_instances()
+    instanc = [i for r in instances['Reservations'] for i in r['Instances']]
+    to_row = lambda x: (
+        get_tags(x, 'Name'),
+        get_tags(x, 'Tenant'),
+        get_tags(x, 'Environment'),
+        x['State']['Name'],
+        get_try(x, 'PublicIpAddress'),
+        get_try(x, 'PrivateIpAddress'),
+        x['LaunchTime'],  #.split('T', 2)[0],
+        x['InstanceId'],
+    )
+    print_result("EC2 @ region '%s'" % region,
+        process_list(instanc, to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers)
 
 
-def list_elb(input_args):
+def list_elb(region, input_args=""):
     headers = (
         'name',
         'customer',
@@ -178,20 +179,19 @@ def list_elb(input_args):
 
     # response = conn.describe_tags(LoadBalancerNames=[name])
 
-    for region in regions:
-        conn = boto3.client('elb', region)
-        instances = conn.describe_load_balancers()
+    conn = boto3.client('elb', region)
+    instances = conn.describe_load_balancers()
 
-        to_row = lambda x: (
-            x['LoadBalancerName'],
-            elb_get_tags(conn, x['LoadBalancerName'], 'Tenant'),
-            elb_get_tags(conn, x['LoadBalancerName'], 'Environment'),
-            x['CreatedTime']
-        )
-        print_result("EC2:ELB @ region '%s'" % region,
-            voyeur(instances['LoadBalancerDescriptions'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    to_row = lambda x: (
+        x['LoadBalancerName'],
+        elb_get_tags(conn, x['LoadBalancerName'], 'Tenant'),
+        elb_get_tags(conn, x['LoadBalancerName'], 'Environment'),
+        x['CreatedTime']
+    )
+    print_result("EC2:ELB @ region '%s'" % region,
+        process_list(instances['LoadBalancerDescriptions'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_volume(input_args):
+def list_volume(region, input_args=""):
     headers = (
         'id',
         'size',
@@ -200,19 +200,18 @@ def list_volume(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('ec2', region)
-        instances = conn.describe_volumes()
-        to_row = lambda x: (
-            x['VolumeId'],
-            x['Size'],
-            x['State'],
-            x['CreateTime'],
-        )
-        print_result("EC2:Volumes @ region '%s'" % region,
-            voyeur(instances['Volumes'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('ec2', region)
+    instances = conn.describe_volumes()
+    to_row = lambda x: (
+        x['VolumeId'],
+        x['Size'],
+        x['State'],
+        x['CreateTime'],
+    )
+    print_result("EC2:Volumes @ region '%s'" % region,
+        process_list(instances['Volumes'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_elasticache(input_args):
+def list_elasticache(region, input_args=""):
     headers = (
         'cluster id',
         'engine',
@@ -222,20 +221,19 @@ def list_elasticache(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('elasticache', region)
-        instances = conn.describe_cache_clusters()
-        to_row = lambda x: (
-            x['CacheClusterId'],
-            x['Engine'],
-            x['CacheClusterStatus'],
-            elasticache_get_tags(conn, 'arn:aws:elasticache:'+region+':781369435176:cluster:'+x['CacheClusterId'], 'Environment'),
-            x['CacheClusterCreateTime']
-        )
-        print_result("ElastiCache @ region '%s'" % region,
-            voyeur(instances['CacheClusters'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('elasticache', region)
+    instances = conn.describe_cache_clusters()
+    to_row = lambda x: (
+        x['CacheClusterId'],
+        x['Engine'],
+        x['CacheClusterStatus'],
+        elasticache_get_tags(conn, 'arn:aws:elasticache:'+region+':781369435176:cluster:'+x['CacheClusterId'], 'Environment'),
+        x['CacheClusterCreateTime']
+    )
+    print_result("ElastiCache @ region '%s'" % region,
+        process_list(instances['CacheClusters'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_vpc(input_args):
+def list_vpc(region, input_args=""):
     headers = (
         'id',
         'name',
@@ -244,19 +242,18 @@ def list_vpc(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('ec2', region)
-        instances = conn.describe_vpcs()
-        to_row = lambda x: (
-            x['VpcId'],
-            get_tags(x,'Name'),
-            get_tags(x,'Environment'),
-            x['CidrBlock']
-        )
-        print_result("VPC @ region '%s'" % region,
-            voyeur(instances['Vpcs'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('ec2', region)
+    instances = conn.describe_vpcs()
+    to_row = lambda x: (
+        x['VpcId'],
+        get_tags(x,'Name'),
+        get_tags(x,'Environment'),
+        x['CidrBlock']
+    )
+    print_result("VPC @ region '%s'" % region,
+        process_list(instances['Vpcs'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_sg(input_args):
+def list_sg(region, input_args=""):
     headers = (
         'id',
         'name',
@@ -264,19 +261,18 @@ def list_sg(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('ec2', region)
-        instances = conn.describe_security_groups()
-        to_row = lambda x: (
-            x['GroupId'],
-            x['GroupName'],
-            get_tags(x,'Name'),
-            get_tags(x,'Environment')
-        )
-        print_result("EC2:SG @ region '%s'" % region,
-            voyeur(instances['SecurityGroups'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('ec2', region)
+    instances = conn.describe_security_groups()
+    to_row = lambda x: (
+        x['GroupId'],
+        x['GroupName'],
+        get_tags(x,'Name'),
+        get_tags(x,'Environment')
+    )
+    print_result("EC2:SG @ region '%s'" % region,
+        process_list(instances['SecurityGroups'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_dbss(input_args):
+def list_dbss(region, input_args=""):
     headers = (
         'SS id',
         'DB id',
@@ -285,19 +281,18 @@ def list_dbss(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('rds', region)
-        instances = conn.describe_db_snapshots()
-        to_row = lambda x: (
-            x['DBSnapshotIdentifier'],
-            x['DBInstanceIdentifier'],
-            x['Engine'],
-            x['SnapshotCreateTime']
-        )
-        print_result("RDS:Snapshots @ region '%s'" % region,
-            voyeur(instances['DBSnapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('rds', region)
+    instances = conn.describe_db_snapshots()
+    to_row = lambda x: (
+        x['DBSnapshotIdentifier'],
+        x['DBInstanceIdentifier'],
+        x['Engine'],
+        x['SnapshotCreateTime']
+    )
+    print_result("RDS:Snapshots @ region '%s'" % region,
+        process_list(instances['DBSnapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_ec2ss(input_args):
+def list_ec2ss(region, input_args=""):
     headers = (
         'SS id',
         'state',
@@ -307,20 +302,19 @@ def list_ec2ss(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('ec2', region)
-        instances = conn.describe_snapshots(Filters=[{ 'Name': 'owner-alias', 'Values' : ['self'] }])
-        to_row = lambda x: (
-            x['SnapshotId'],
-            x['State'],
-            get_tags(x,'Environment'),
-            x['VolumeSize'],
-            x['StartTime']
-        )
-        print_result("EC2:Snapshots @ region '%s'" % region,
-            voyeur(instances['Snapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('ec2', region)
+    instances = conn.describe_snapshots(Filters=[{ 'Name': 'owner-alias', 'Values' : ['self'] }])
+    to_row = lambda x: (
+        x['SnapshotId'],
+        x['State'],
+        get_tags(x,'Environment'),
+        x['VolumeSize'],
+        x['StartTime']
+    )
+    print_result("EC2:Snapshots @ region '%s'" % region,
+        process_list(instances['Snapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_ecss(input_args):
+def list_ecss(region, input_args=""):
     headers = (
         'SS name',
         'state',
@@ -328,20 +322,19 @@ def list_ecss(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('elasticache', region)
-        instances = conn.describe_snapshots()
-        to_row = lambda x: (
-            x['SnapshotName'],
-            x['SnapshotStatus'],
-            x['SnapshotSource']
-        )
-        print_result("ElasticCache:Snapshots @ region '%s'" % region,
-            voyeur(instances['Snapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('elasticache', region)
+    instances = conn.describe_snapshots()
+    to_row = lambda x: (
+        x['SnapshotName'],
+        x['SnapshotStatus'],
+        x['SnapshotSource']
+    )
+    print_result("ElasticCache:Snapshots @ region '%s'" % region,
+        process_list(instances['Snapshots'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
 
 
-def list_rds(input_args):
+def list_rds(region, input_args=""):
     to_row = lambda x: (
         get_try(x, 'DBName', '???'),
         x['DBInstanceIdentifier'],
@@ -355,13 +348,12 @@ def list_rds(input_args):
     )
     sort_by, filter_by_kwargs = get_options(input_args, headers)
 
-    for region in regions:
-        conn = boto3.client('rds', region)
-        instances = conn.describe_db_instances()
-        print_result( "RDS @ region '%s'" % region,
-            voyeur(instances['DBInstances'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+    conn = boto3.client('rds', region)
+    instances = conn.describe_db_instances()
+    print_result( "RDS @ region '%s'" % region,
+        process_list(instances['DBInstances'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
-def list_s3(input_args):
+def list_s3(input_args=""):
     headers = (
         'name',
         'region',
@@ -380,46 +372,36 @@ def list_s3(input_args):
         x['CreationDate']
     )
     print_result("S3 @ 'worldwide'",
-        voyeur(instances['Buckets'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
+        process_list(instances['Buckets'], to_row=to_row, sort_by=sort_by, filter_by=filter_by_kwargs), headers )
 
+def _create_parser():
+        parser = argparse.ArgumentParser(
+            prog='aws-inventory',
+            description='CLI to list inventory in AWS')
+        parser.add_argument("-V", "--version", action="version",
+                            version="{}".format(__version__))
+        parser.add_argument('-r', '--region', nargs='+', help='list of AWS Regions to collect from')
+        parser.add_argument('command', choices=['all', 'ec2','vpc','elb','rds','elasticache','sg','s3','colume','ec2ss','dbss'])
+        return parser
 
 def main():
-    if len(sys.argv) <= 1:
-        list_s3(sys.argv[1:])
-        list_vpc(sys.argv[1:])
-        list_ec2(sys.argv[1:])
-        list_elb(sys.argv[1:])
-        list_rds(sys.argv[1:])
-        list_elasticache(sys.argv[1:])
-        list_sg(sys.argv[1:])
-        list_volume(sys.argv[1:])
-        list_ec2ss(sys.argv[1:])
-        list_dbss(sys.argv[1:])
-    elif sys.argv[1] == 'ec2':
-        list_ec2(sys.argv[2:])
-    elif sys.argv[1] == 'elb':
-        list_elb(sys.argv[2:])
-    elif sys.argv[1] == 'rds':
-        list_rds(sys.argv[2:])
-    elif sys.argv[1] == 'volume':
-        list_volume(sys.argv[2:])
-    elif sys.argv[1] == 'elasticache':
-        list_elasticache(sys.argv[2:])
-    elif sys.argv[1] == 'vpc':
-        list_vpc(sys.argv[2:])
-    elif sys.argv[1] == 's3':
-        list_s3(sys.argv[2:])
-    elif sys.argv[1] == 'sg':
-        list_sg(sys.argv[2:])
-    elif sys.argv[1] == 'dbss':
-        list_dbss(sys.argv[2:])
-    elif sys.argv[1] == 'ec2ss':
-        list_ec2ss(sys.argv[2:])
-    elif sys.argv[1] == 'ecss':
-        list_ecss(sys.argv[2:])
+    parser = _create_parser()
+    _parsed_args = parser.parse_args()
+
+    if _parsed_args.command == 's3':
+      list_s3()
+      exit()
+
+
+    if _parsed_args.region:
+       regions = _parsed_args.region
+    else:
+       regions = __regions
+       
+    for _region in regions:
+       globals()['list_'+_parsed_args.command](_region)
 
 
 if __name__ == '__main__':
     main()
 
-    print '\n\n--- FINISHED\n\n'
